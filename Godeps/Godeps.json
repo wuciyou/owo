@@ -1,0 +1,15 @@
+{
+	"ImportPath": "github.com/wuciyou/owo",
+	"GoVersion": "go1.8",
+	"GodepVersion": "v79",
+	"Deps": [
+		{
+			"ImportPath": "github.com/samuel/go-zookeeper/zk",
+			"Rev": "e6b59f6144beb8570562539c1898a0b1fea34b41"
+		},
+		{
+			"ImportPath": "github.com/wuciyou/dogo",
+			"Rev": "813ad19185c44a337d7ac6bf17acec940330cd9c"
+		}
+	]
+}
