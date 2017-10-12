@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/wuciyou/dogo"
+	"math/rand"
 	"net/rpc"
 	"sync"
 )
@@ -53,24 +54,56 @@ func (this *consumer) addProvider(name string, pNode *providerNode) {
 
 func (this *consumer) call(serviceMethod string, args interface{}, reply interface{}) error {
 
-	for realServiceName, pNode := range this.providerMaps {
+	if pNode, err := this.doSelect(serviceMethod); err == nil {
 
 		dogo.Dglog.Debugf("serverMethod:%s, pNode.Name:%s", serviceMethod, pNode.Name)
-		if pNode.Name == serviceMethod {
-			client, err := rpc.DialHTTP("tcp", pNode.Addr)
-			if err != nil {
-				dogo.Dglog.Errorf("Can't connect server method '%s' error:%+v \n", realServiceName, err)
-				return err
-			}
-			err = client.Call(serviceMethod, args, reply)
 
-			if err != nil {
-				dogo.Dglog.Errorf("Can't call server method '%s' error:%+v \n", realServiceName, err)
-				return err
-			}
+		client, err := rpc.DialHTTP("tcp", pNode.Addr)
+		if err != nil {
+			dogo.Dglog.Errorf("Can't connect server method '%s' error:%+v \n", pNode.Id, err)
+			return err
+		}
+		err = client.Call(serviceMethod, args, reply)
 
-			return nil
+		if err != nil {
+			dogo.Dglog.Errorf("Can't call server method '%s' error:%+v \n", pNode.Id, err)
+			return err
+		}
+
+	} else {
+		return err
+	}
+	return nil
+}
+
+func (this *consumer) doSelect(name string) (*providerNode, error) {
+	if providerNodes, exists := this.serviceMethodMaps[name]; exists {
+		var totalWeight = 0
+		var sameWeight = true
+		for index, provider := range providerNodes {
+			totalWeight += provider.Level
+			if sameWeight && index > 0 && provider.Level != providerNodes[index-1].Level {
+				sameWeight = false
+			}
+		}
+		if totalWeight > 0 && !sameWeight {
+			offset := rand.Intn(totalWeight)
+
+			for _, provider := range providerNodes {
+				offset -= provider.Level
+				if offset < 0 {
+					return provider, nil
+				}
+			}
+		}
+		if len(providerNodes) == 1 {
+			return providerNodes[0], nil
+		} else {
+			return providerNodes[rand.Intn(len(providerNodes)-1)], nil
 		}
 	}
-	return errors.New(fmt.Sprintf("Not find serverMedthod:'%s'", serviceMethod))
+
+	errMesg := fmt.Sprintf("Can't find service method name:'%s'", name)
+	dogo.Dglog.Errorf(errMesg)
+	return nil, errors.New(errMesg)
 }
