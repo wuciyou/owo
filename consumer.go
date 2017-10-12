@@ -25,9 +25,18 @@ func initConsumer() *consumer {
 func (this *consumer) deleteProvider(name string) {
 	this.rwm.Lock()
 	defer this.rwm.Unlock()
-	if _, exsits := this.providerMaps[name]; exsits {
-		dogo.Dglog.Debugf("deleteProvider(name:%s)", name)
+	if providerNode, exsits := this.providerMaps[name]; exsits {
+		methodName := providerNode.Name
+		for index, serviceMethodNode := range this.serviceMethodMaps[methodName] {
+			if serviceMethodNode.Id == name {
+				this.serviceMethodMaps[methodName] = append(this.serviceMethodMaps[methodName][:index], this.serviceMethodMaps[methodName][index+1:]...)
+			}
+		}
+		if len(this.serviceMethodMaps[methodName]) == 0 {
+			delete(this.serviceMethodMaps, methodName)
+		}
 		delete(this.providerMaps, name)
+		dogo.Dglog.Debugf("deleteProvider(name:%s),serviceMethodMaps:%+v \n", name, this.serviceMethodMaps[methodName])
 	}
 }
 
@@ -36,8 +45,9 @@ func (this *consumer) addProvider(name string, pNode *providerNode) {
 	defer this.rwm.Unlock()
 
 	if _, exsits := this.providerMaps[name]; !exsits {
-		dogo.Dglog.Debugf("addProvider(name:%s,pHode:%+v)", name, pNode)
 		this.providerMaps[name] = pNode
+		this.serviceMethodMaps[pNode.Name] = append(this.serviceMethodMaps[pNode.Name], pNode)
+		dogo.Dglog.Debugf("addProvider(name:%s,pHode:%+v), serviceMethodMaps:%+v\n", name, pNode, this.serviceMethodMaps[pNode.Name])
 	}
 }
 

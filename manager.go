@@ -42,8 +42,8 @@ func initOwo() *owoApp {
 	app.register = initRegister(*registerAddr)
 	app.consumer = initConsumer()
 	app.provider = initProvider(app.listen.Addr().String())
-	app.register.listenEvent(app.refresh, true)
-	go app.register.listenEvent(app.refresh, false)
+	app.register.listenNode(app.refresh, true)
+	go app.register.listenNode(app.refresh, false)
 	return app
 }
 

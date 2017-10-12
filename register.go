@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/samuel/go-zookeeper/zk"
 	"github.com/wuciyou/dogo"
+	"sync"
 	"time"
 )
 
@@ -17,20 +18,27 @@ const (
 	PROVIDER_ADD
 )
 
+type hooksMethod func(r *register)
 type register struct {
-	addr     string
-	rootPath string
-	zkConn   *zk.Conn
+	addr                     string
+	rootPath                 string
+	zkConn                   *zk.Conn
+	cacheSelfProviderNodeMap map[string]*providerNode
+	rwm                      *sync.RWMutex
+	zkConnEvent              <-chan zk.Event
+	hooksMethod              map[string][]hooksMethod
 }
 
 func initRegister(addr string) *register {
 	var err error
 	r := &register{rootPath: rootPath}
-	r.zkConn, _, err = zk.Connect([]string{addr}, time.Second*10)
+	r.cacheSelfProviderNodeMap = make(map[string]*providerNode)
+	r.rwm = &sync.RWMutex{}
+	r.zkConn, r.zkConnEvent, err = zk.Connect([]string{addr}, time.Second*10)
+	r.hooksMethod = make(map[string][]hooksMethod)
 	if err != nil {
 		dogo.Dglog.Error(err)
 	}
-
 	exists, _, err := r.zkConn.Exists(r.rootPath)
 
 	if err != nil {
@@ -42,11 +50,40 @@ func initRegister(addr string) *register {
 			dogo.Dglog.Errorf("Create path:'%s' returned error:%+v ", r.rootPath, err)
 		}
 	}
+	r.listenEvent(r.zkConnEvent)
+
+	// 断线重新连接成功后，重新注册服务
+	r.listenEventFunc(r.disRePush, zk.EventSession, zk.StateHasSession)
 
 	return r
 }
 
-func (this *register) listenEvent(callback func([]byte, string, providerEvent), isInit bool) {
+func (this *register) listenEvent(event <-chan zk.Event) {
+	go func() {
+		for {
+			e := <-event
+			for _, hookFunc := range this.hooksMethod[fmt.Sprintf("%d_%d", e.Type, e.State)] {
+				hookFunc(this)
+			}
+
+			for _, hookFunc := range this.hooksMethod[fmt.Sprintf("%d_", e.Type)] {
+				hookFunc(this)
+			}
+		}
+	}()
+}
+
+func (this *register) listenEventFunc(hook hooksMethod, eventType zk.EventType, eventStat ...zk.State) {
+	hooksKey := fmt.Sprintf("%d_", eventType)
+	if len(eventStat) > 0 {
+		hooksKey = fmt.Sprintf("%d_%d", eventType, eventStat[0])
+	}
+	this.rwm.Lock()
+	this.hooksMethod[hooksKey] = append(this.hooksMethod[hooksKey], hook)
+	this.rwm.Unlock()
+}
+
+func (this *register) listenNode(callback func([]byte, string, providerEvent), isInit bool) {
 	var oldChilds = make(map[string][]byte)
 	for {
 		var curChilds = make(map[string][]byte)
@@ -85,11 +122,25 @@ func (this *register) listenEvent(callback func([]byte, string, providerEvent), 
 	}
 }
 
+func (this *register) disRePush(r *register) {
+	for path, providerNode := range this.cacheSelfProviderNodeMap {
+		if isExists, _, err := this.zkConn.Exists(path); !isExists || err != nil {
+			dogo.Dglog.Warningf("repush provider node old path:'%s', err:%+v", path, err)
+			this.push(providerNode)
+		}
+	}
+}
 func (this *register) push(pNode *providerNode) {
 
 	nodePath := fmt.Sprintf("%s/%s_%s", this.rootPath, pNode.Name, pNode.Addr)
 	data, _ := json.Marshal(pNode)
-	if _, err := this.zkConn.CreateProtectedEphemeralSequential(nodePath, data, zk.WorldACL(zk.PermAll)); err != nil {
+	if path, err := this.zkConn.CreateProtectedEphemeralSequential(nodePath, data, zk.WorldACL(zk.PermAll)); err != nil {
 		dogo.Dglog.Errorf("Create path:'%s' returned error:%+v ", nodePath, err)
+	} else {
+		this.rwm.Lock()
+		pNode.Id = path
+		this.cacheSelfProviderNodeMap[path] = pNode
+		this.rwm.Unlock()
 	}
+
 }
